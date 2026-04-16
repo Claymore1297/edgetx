@@ -26,6 +26,45 @@
 #include "menu.h"
 #include "menutoolbar.h"
 
+static bool fileExists(const std::string &path)
+{
+  FILINFO fno;
+  return f_stat(path.c_str(), &fno) == FR_OK;
+}
+
+static std::string getCsvField(const std::string &line, int index)
+{
+  std::vector<std::string> fields;
+  std::string current;
+  bool inQuotes = false;
+
+  for (char ch : line)
+  {
+    if (ch == '"')
+    {
+      inQuotes = !inQuotes;
+    }
+    else if (ch == ',' && !inQuotes)
+    {
+      fields.push_back(current);
+      current.clear();
+    }
+    else
+    {
+      current += ch;
+    }
+  }
+  fields.push_back(current);
+
+  if (index < 0 || index >= (int)fields.size())
+    return "";
+
+  std::string f = fields[index];
+  f.erase(std::remove(f.begin(), f.end(), '"'), f.end());
+
+  return f;
+}
+
 class FileChoiceMenuToolbar : public MenuToolbar
 {
  public:
@@ -41,7 +80,7 @@ class FileChoiceMenuToolbar : public MenuToolbar
     filterButton(choice, '0', '9', "0-9");
 
     bool found = false;
-    for (int i = 0; i <= choice->getMax(); i += 1) {
+    for (int i = 0; i <= choice->getMax(); i++) {
       char c = choice->getString(i)[0];
       if (c && !isdigit(c) && !isalpha(c)) {
         found = true;
@@ -62,10 +101,10 @@ class FileChoiceMenuToolbar : public MenuToolbar
     addButton(STR_SELECT_MENU_CLR, 0, 0, nullptr, nullptr, true);
   }
 
-  void filterButton(FileChoice *choice, char from, char to, const char* title)
+  void filterButton(FileChoice *choice, char from, char to, const char *title)
   {
     bool found = false;
-    for (int i = 0; i <= choice->getMax(); i += 1) {
+    for (int i = 0; i <= choice->getMax(); i++) {
       char c = choice->getString(i)[0];
       if (isupper(c)) c += 0x20;
       if (c >= from && c <= to) {
@@ -89,8 +128,6 @@ class FileChoiceMenuToolbar : public MenuToolbar
   }
 
   static LAYOUT_SIZE(FC_COLS, 3, 2)
-
- protected:
 };
 
 FileChoice::FileChoice(Window *parent, const rect_t &rect, const std::string folder,
@@ -99,8 +136,13 @@ FileChoice::FileChoice(Window *parent, const rect_t &rect, const std::string fol
                        std::function<void(std::string)> setValue,
                        bool stripExtension, const char *title) :
     Choice(
-        parent, rect, 0, 0, [=]() { return selectedIdx; },
-        [=](int val) { setValue(getString(val)); selectedIdx = val; }, title, CHOICE_TYPE_FOLDER),
+        parent, rect, 0, 0, [=]() { return selectedIdx >= 0 ? selectedIdx : 0; },
+        [=](int val) {
+          if (val >= 0 && val < (int)entries.size())
+            setValue(entries[val].second);
+          selectedIdx = val;
+        },
+        title, CHOICE_TYPE_FOLDER),
     folder(std::move(folder)),
     extension(std::move(extension)),
     maxlen(maxlen),
@@ -118,61 +160,129 @@ void FileChoice::loadFiles()
 
   filesLoaded = true;
 
-  FILINFO fno;
-  DIR dir;
-  std::list<std::string> files;
-  const char *fnExt;
-  uint8_t fnLen, extLen;
+  entries.clear();
 
-  FRESULT res = f_opendir(&dir, folder.c_str());  // Open the directory
-  if (res == FR_OK) {
-    bool firstTime = true;
-    for (;;) {
-      res = sdReadDir(&dir, &fno, firstTime);
-      if (res != FR_OK || fno.fname[0] == 0)
-        break;  // break on error or end of dir
-      if (fno.fattrib & (AM_HID | AM_SYS | AM_DIR))
-        continue;  // Ignore subfolders, hidden files and system files
-      if (fno.fname[0] == '.' && fno.fname[1] != '.')
-        continue;  // Ignore hidden files under UNIX, but not ..
+  std::string csvPath = "/" + folder + "/"+ std::string(currentLanguagePack->id, 2) + ".csv";
 
-      fnExt = getFileExtension(fno.fname, 0, 0, &fnLen, &extLen);
+  bool useCsv = fileExists(csvPath);
 
-      if (!extension.empty() && (!fnExt || !isExtensionMatching(fnExt, extension.c_str())))
-        continue;  // wrong extension
+  if (useCsv)
+  {
+    FIL file;
+    if (f_open(&file, csvPath.c_str(), FA_READ) == FR_OK)
+    {
+      char line[256];
+      int pos = 0;
+      char c;
+      UINT br;
 
-      if (stripExtension) fnLen -= extLen;
+      while (true)
+      {
+        if (f_read(&file, &c, 1, &br) != FR_OK || br != 1)
+          break;
 
-      if (!fnLen || fnLen > maxlen) continue;  // wrong size
+        if (c == '\n' || pos >= (int)sizeof(line) - 1)
+        {
+          line[pos] = '\0';
+          pos = 0;
 
-      // eject duplicates
-      std::string newFile(fno.fname, fnLen);
-      if (std::find(files.begin(), files.end(), newFile) != files.end())
-        continue;
+          std::string str(line);
+          str.erase(std::remove(str.begin(), str.end(), '\r'), str.end());
 
-      files.emplace_back(newFile);
+          if (!str.empty())
+          {
+            // col 3 = display name, col 6 =raw file
+            std::string display = getCsvField(str, 2);
+            std::string raw     = getCsvField(str, 5);
+
+            if (!display.empty() && !raw.empty())
+            {
+              std::string fullPath = "/" + folder + "/" + raw;
+
+              if (fileExists(fullPath))
+                entries.emplace_back(display, raw);
+            }
+          }
+        }
+        else
+        {
+          line[pos++] = c;
+        }
+      }
+
+      f_close(&file);
     }
-
-    f_closedir(&dir);
   }
 
-  if (!files.empty()) {
-    // sort files
-    files.sort(compare_nocase);
-    files.push_front("");
+  if (!useCsv || entries.empty()) {
+    DIR dir;
+    FILINFO fno;
+    std::list<std::string> files;
 
-    std::string value = getValue();
-    int idx = 0;
-    for (const auto &file : files) {
-      addValue(file.c_str());
-      if (strcmp(value.c_str(), file.c_str()) == 0) selectedIdx = idx;
-      idx += 1;
+    if (f_opendir(&dir, ("/" + folder).c_str()) == FR_OK)
+    {
+      for (;;)
+      {
+        if (f_readdir(&dir, &fno) != FR_OK || fno.fname[0] == 0)
+          break;
+
+        if (fno.fattrib & (AM_HID | AM_SYS | AM_DIR))
+          continue;
+
+        if (fno.fname[0] == '.' && fno.fname[1] != '.')
+          continue;
+
+        const char *fnExt;
+        uint8_t fnLen, extLen;
+
+        fnExt = getFileExtension(fno.fname, 0, 0, &fnLen, &extLen);
+
+        if (!extension.empty() &&
+            (!fnExt || !isExtensionMatching(fnExt, extension.c_str())))
+          continue;
+
+        if (stripExtension)
+          fnLen -= extLen;
+
+        if (!fnLen || fnLen > maxlen)
+          continue;
+
+        std::string name(fno.fname, fnLen);
+        files.push_back(name);
+      }
+
+      f_closedir(&dir);
     }
 
-    setMax(files.size() - 1);
+    for (auto &f : files)
+      entries.emplace_back(f, f);
   }
 
-  fileCount = files.size();
+    if (entries.empty())
+    return;
+
+  std::sort(entries.begin(), entries.end(),
+            [](const auto &a, const auto &b) {
+              return compare_nocase(a.first, b.first);
+            });
+
+  entries.insert(entries.begin(), {"", ""});
+
+  std::string current = getValue();
+  int idx = 0;
+
+  for (const auto &e : entries)
+  {
+    addValue(e.first.c_str());
+
+    if (!current.empty() && current == e.second)
+      selectedIdx = idx;
+
+    idx++;
+  }
+
+  setMax(entries.size() - 1);
+  fileCount = entries.size();
 }
 
 void FileChoice::openMenu()
@@ -193,5 +303,9 @@ void FileChoice::openMenu()
     menu->setCloseHandler([=]() { setEditMode(false); });
   } else {
     new MessageDialog(STR_SDCARD, STR_NO_FILES_ON_SD);
+  }
+  if (entries.empty()) {
+    selectedIdx = 0;
+    return;
   }
 }

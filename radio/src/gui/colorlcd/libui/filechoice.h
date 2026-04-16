@@ -19,28 +19,29 @@
 #pragma once
 
 #include "choice.h"
+#include <functional>
 #include <string>
+#include <vector>
+#include <list>
 
 class FileChoice : public Choice
 {
 public:
-  FileChoice(Window* parent, const rect_t& rect, const std::string folder,
+  FileChoice(Window *parent, const rect_t &rect, const std::string folder,
              const std::string extension, int maxlen,
              std::function<std::string()> getValue,
              std::function<void(std::string)> setValue,
              bool stripExtension = false,
-             const char* title = "");
+             const char *title = nullptr);
 
 #if defined(DEBUG_WINDOWS)
   std::string getName() const override { return "FileChoice"; }
 #endif
 
-protected:
-  bool filesLoaded = false;
-  int fileCount = 0;
-  int selectedIdx = -1;
-  Menu* menu = nullptr;
   std::string getLabelText() override;
+  void openMenu();
+
+protected:
   std::string folder;
   std::string extension;
   int maxlen;
@@ -48,6 +49,9 @@ protected:
   bool stripExtension;
 
   void loadFiles();
+  bool filesLoaded = false;
+  int fileCount = 0;
+  int selectedIdx = -1;
 
-  void openMenu() override;
+  std::vector<std::pair<std::string, std::string>> entries;
 };
