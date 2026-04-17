@@ -808,6 +808,7 @@ void FunctionsPage::build(Window *window)
         if (hasFocus && !isRebuilding) {
           prevFocusIndex = focusIndex;
           focusIndex = i;
+          button->refresh();
         }
       });
 
