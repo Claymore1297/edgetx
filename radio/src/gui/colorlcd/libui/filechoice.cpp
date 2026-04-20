@@ -19,6 +19,8 @@
 #include "filechoice.h"
 
 #include <algorithm>
+#include <string>
+#include <vector>
 
 #include "dialog.h"
 #include "edgetx.h"
@@ -32,37 +34,60 @@ static bool fileExists(const std::string &path)
   return f_stat(path.c_str(), &fno) == FR_OK;
 }
 
-static std::string getCsvField(const std::string &line, int index)
+static std::vector<std::string> parseCsvLine(const std::string &line)
 {
-  std::vector<std::string> fields;
-  std::string current;
+  std::vector<std::string> result;
+  std::string field;
+
   bool inQuotes = false;
 
-  for (char ch : line)
+  for (size_t i = 0; i < line.size(); ++i)
   {
-    if (ch == '"')
-    {
-      inQuotes = !inQuotes;
-    }
-    else if (ch == ',' && !inQuotes)
-    {
-      fields.push_back(current);
-      current.clear();
-    }
-    else
-    {
-      current += ch;
+    char ch = line[i];
+
+    if (inQuotes) {
+      if (ch == '"') {
+        // check Escaped quote
+        if (i + 1 < line.size() && line[i + 1] == '"') {
+          field += '"';
+          ++i; // skip the second quote
+        } else {
+          inQuotes = false; // end of quoted field
+        }
+      } else {
+        field += ch;
+      }
+    } else {
+      if (ch == '"') {
+        inQuotes = true;
+      } else if (ch == ',') {
+        result.push_back(field);
+        field.clear();
+      } else {
+        field += ch;
+      }
     }
   }
-  fields.push_back(current);
 
-  if (index < 0 || index >= (int)fields.size())
-    return "";
+  result.push_back(field);
+  return result;
+}
 
-  std::string f = fields[index];
-  f.erase(std::remove(f.begin(), f.end(), '"'), f.end());
+static std::vector<std::string> getCsvFields(const std::string &line,
+                                                   const std::vector<int> &columns)
+{
+  std::vector<std::string> parsed = parseCsvLine(line);
+  std::vector<std::string> result;
 
-  return f;
+  for (int col : columns)
+  {
+    int idx = col - 1;
+    if (idx >= 0 && idx < (int)parsed.size())
+      result.push_back(parsed[idx]);
+    else
+      result.push_back("");
+  }
+  return result;
 }
 
 class FileChoiceMenuToolbar : public MenuToolbar
@@ -192,8 +217,9 @@ void FileChoice::loadFiles()
           if (!str.empty())
           {
             // col 3 = display name, col 6 =raw file
-            std::string display = getCsvField(str, 2);
-            std::string raw     = getCsvField(str, 5);
+            auto values = getCsvFields(str, {3, 6});
+            std::string display = values[0];
+            std::string raw     = values[1];
 
             if (!display.empty() && !raw.empty())
             {
