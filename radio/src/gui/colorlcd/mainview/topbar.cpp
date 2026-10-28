@@ -190,20 +190,46 @@ void TopBar::removeWidget(unsigned int index)
 
 void TopBar::load()
 {
-  unsigned int count = getZonesCount();
-  for (unsigned int i = 0; i < count; i++) {
-    // remove old widget
+  // Clean up all old widgets across all maximum possible zones to prevent ghost artifacts
+  for (int i = 0; i < MAX_TOPBAR_ZONES; i++) {
     if (widgets[i]) {
       widgets[i]->closeWindow();
       widgets[i] = nullptr;
     }
   }
 
+  unsigned int count = getZonesCount();
+
+  // Locate if and at which index a timer widget is placed
+  int timerIndex = -1;
   for (unsigned int i = 0; i < count; i++) {
-    // and load new one if required
+    if (g_model.getTopbarData()->hasWidget(i)) {
+      const char* name = g_model.getTopbarData()->getWidgetName(i);
+      if (name && strstr(name, "Timer") != nullptr) {
+        timerIndex = (int)i;
+        break;
+      }
+    }
+  }
+
+  // If a timer exists, instantiate it FIRST to trigger the global rendering/event context,
+  // but keep it at its exact physical position using getZone(timerIndex).
+  if (timerIndex != -1 && g_model.getTopbarData()->hasWidget(timerIndex)) {
+    widgets[timerIndex] = WidgetFactory::newWidget(g_model.getTopbarData()->getWidgetName(timerIndex), this, getZone(timerIndex), -1, timerIndex);
+  }
+
+  // Load all remaining widgets at their respective positions
+  for (unsigned int i = 0; i < count; i++) {
+    if ((int)i == timerIndex) continue; // Timer was already loaded above
+
     if (g_model.getTopbarData()->hasWidget(i)) {
       widgets[i] = WidgetFactory::newWidget(g_model.getTopbarData()->getWidgetName(i), this, getZone(i), -1, i);
     }
+  }
+
+  // Force a final global container refresh
+  if (getLvObj()) {
+    lv_obj_invalidate(getLvObj());
   }
 }
 
